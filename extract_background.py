@@ -73,7 +73,7 @@ def extract_background_clips(json_file, game_dir, output_dir, game_name, clips_p
     # Keep track of extracted clips
     clips_extracted = 0
     attempts = 0
-    max_attempts = 50  # Prevent infinite loops
+    max_attempts = 150  # Prevent infinite loops
     
     # Process each half to extract random background clips
     for period, video_path in enumerate(video_files, 1):
