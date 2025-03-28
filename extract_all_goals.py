@@ -16,6 +16,9 @@ def extract_goal_clips(json_file, game_dir, output_dir, game_name):
         output_dir (str): Directory to save the extracted clips
         game_name (str): Name of the game (used for naming output files)
     """
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
     # Load json data
     try:
         with open(json_file, 'r') as f:
@@ -77,100 +80,62 @@ def extract_goal_clips(json_file, game_dir, output_dir, game_name):
                 print(f"Clip already exists: {output_path}. Skipping.")
                 continue
             
+            # Calculate the frames in the video
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                print(f"Error: Could not open video file {video_path}")
+                continue
+                
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            cap.release()
+            
             # Convert goal time to seconds from the beginning of the half
-            goal_time_seconds = minutes * 60 + seconds
+            minutes_in_seconds = minutes * 60
+            total_seconds = minutes_in_seconds + seconds
+            goal_frame = int(total_seconds * fps)
             
-            # Extract 15 seconds before the goal
-            # Calculate start time (15 seconds before goal)
-            start_time_seconds = max(0, goal_time_seconds - 15)
+            # Calculate start frame (15 seconds before goal)
+            seconds_to_extract = 15
+            start_frame = max(0, goal_frame - (seconds_to_extract * int(fps)))
             
-            # Format the time strings for ffmpeg
-            # Convert to HH:MM:SS format for better precision
-            start_time_str = f"{start_time_seconds // 3600:02d}:{(start_time_seconds % 3600) // 60:02d}:{start_time_seconds % 60:02d}"
-            duration = "00:00:15"  # Exactly 15 seconds
+            # Calculate time values for ffmpeg
+            start_time = start_frame / fps
+            duration = seconds_to_extract  # Exactly 15 seconds
             
             # Use ffmpeg to extract the clip
-            ffmpeg_cmd = "ffmpeg"  # Use system ffmpeg on cluster
+            # On the cluster, ffmpeg should be available in the system
+            ffmpeg_cmd = "ffmpeg"
             
             cmd = [
                 ffmpeg_cmd,
-                "-y",  # Overwrite output files
                 "-i", video_path,
-                "-ss", start_time_str,
-                "-t", duration,
+                "-ss", f"{start_time:.3f}",
+                "-t", f"{duration:.3f}",
                 "-c:v", "libx264",  # Use x264 codec for better compatibility
                 "-c:a", "aac",      # Use AAC for audio
                 "-strict", "experimental",
                 "-b:v", "2500k",    # Reasonable bitrate
                 "-preset", "fast",  # Faster encoding with good quality
+                "-y",               # Overwrite output files without asking
                 output_path
             ]
             
             print(f"Extracting goal {i+1}: {goal['gameTime']} - {team} team")
-            print(f"Command: {' '.join(cmd)}")
             
             try:
-                # Use shell=True on Windows to help find ffmpeg
-                is_windows = os.name == 'nt'
-                if is_windows:
-                    # On Windows, convert the command list to a string
-                    cmd_str = " ".join(cmd)
-                    subprocess.run(cmd_str, check=True, shell=True)
-                else:
-                    subprocess.run(cmd, check=True)
-                    
-                # Verify the clip length
-                cap = cv2.VideoCapture(output_path)
-                if cap.isOpened():
-                    fps = cap.get(cv2.CAP_PROP_FPS)
-                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    duration_seconds = frame_count / fps
-                    cap.release()
-                    
-                    print(f"Successfully saved clip to {output_path}")
-                    print(f"Clip duration: {duration_seconds:.2f} seconds")
-                    
-                    # If clip is significantly shorter than 15 seconds, try again with different approach
-                    if duration_seconds < 14.0:
-                        print(f"Warning: Clip duration is shorter than expected ({duration_seconds:.2f} < 15.0 seconds)")
-                        print("Trying alternative approach...")
-                        
-                        # Use a different approach with seeking before input
-                        alt_cmd = [
-                            ffmpeg_cmd,
-                            "-y",
-                            "-ss", start_time_str,  # Seek before input (more accurate)
-                            "-i", video_path,
-                            "-t", duration,
-                            "-c:v", "libx264",
-                            "-c:a", "aac",
-                            "-strict", "experimental",
-                            "-b:v", "2500k",
-                            "-preset", "fast",
-                            output_path
-                        ]
-                        
-                        print(f"Alternative command: {' '.join(alt_cmd)}")
-                        
-                        if is_windows:
-                            alt_cmd_str = " ".join(alt_cmd)
-                            subprocess.run(alt_cmd_str, check=True, shell=True)
-                        else:
-                            subprocess.run(alt_cmd, check=True)
-                        
-                        # Verify again
-                        cap = cv2.VideoCapture(output_path)
-                        if cap.isOpened():
-                            fps = cap.get(cv2.CAP_PROP_FPS)
-                            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                            duration_seconds = frame_count / fps
-                            cap.release()
-                            print(f"New clip duration: {duration_seconds:.2f} seconds")
+                # On Linux (cluster), we don't need shell=True
+                subprocess.run(cmd, check=True)
                 
+                # Verify the output exists
+                if os.path.exists(output_path):
+                    print(f"Successfully saved clip to {output_path}")
+                else:
+                    print(f"Warning: Output file doesn't exist: {output_path}")
+                    
             except subprocess.CalledProcessError as e:
                 print(f"Error extracting clip: {e}")
             except FileNotFoundError:
-                print(f"Error: ffmpeg not found. Please make sure ffmpeg is installed.")
+                print(f"Error: ffmpeg not found. Please make sure ffmpeg is installed on the cluster.")
                 return
                 
         except (KeyError, ValueError, IndexError) as e:
@@ -192,14 +157,14 @@ def process_all_games(data_dir, output_dir, limit=None):
     # Find all game directories
     all_games = []
     for root, dirs, files in os.walk(data_dir):
-        # Look for directories that have the Labels-v2.json file
-        if "Labels-v2.json" in files and ("1_224p.mkv" in files or "2_224p.mkv" in files):
+        # Look for directories that have the Labels-v2.json file and video files
+        if "Labels-v2.json" in files and any(f.endswith("_224p.mkv") for f in files):
             all_games.append(root)
     
     print(f"Found {len(all_games)} potential game directories")
     
     # Limit the number of games if specified
-    if limit and isinstance(limit, int):
+    if limit and isinstance(limit, int) and limit > 0:
         all_games = all_games[:limit]
         print(f"Limiting to {limit} games")
     
@@ -220,13 +185,19 @@ def process_all_games(data_dir, output_dir, limit=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Extract goal clips from multiple football games.')
-    parser.add_argument('--data_dir', type=str, default=os.path.expanduser("~/Code/data_of_interest"),
+    parser.add_argument('--data_dir', type=str, required=True,
                         help='Directory containing the game data')
-    parser.add_argument('--output_dir', type=str, default=os.path.expanduser("~/Code/before_goal"),
+    parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory to save the extracted clips')
     parser.add_argument('--limit', type=int, default=10,
                         help='Limit the number of games to process')
     
     args = parser.parse_args()
     
+    # Print configuration
+    print(f"Data directory: {args.data_dir}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Processing up to {args.limit} games")
+    
+    # Run the extraction
     process_all_games(args.data_dir, args.output_dir, args.limit)
