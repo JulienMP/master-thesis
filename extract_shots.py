@@ -6,10 +6,13 @@ import glob
 import argparse
 from pathlib import Path
 
+
+
 def extract_shot_clips(json_file, game_dir, output_dir, game_name):
     """
-    Extract 15-second clips of shots on target that didn't result in goals.
-    
+    Extract 15-second clips ending at the moment of shots on target
+    that didn't result in goals immediately after.
+
     Args:
         json_file (str): Path to the JSON file with match annotations
         game_dir (str): Directory containing the match video files (MKV)
@@ -18,7 +21,7 @@ def extract_shot_clips(json_file, game_dir, output_dir, game_name):
     """
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Load json data
     try:
         with open(json_file, 'r') as f:
@@ -26,7 +29,7 @@ def extract_shot_clips(json_file, game_dir, output_dir, game_name):
     except (json.JSONDecodeError, FileNotFoundError) as e:
         print(f"Error loading JSON file {json_file}: {e}")
         return
-    
+
     # The Labels-v2.json file has a specific structure with annotations as a list
     if 'annotations' in data:
         annotations = data['annotations']
@@ -34,12 +37,13 @@ def extract_shot_clips(json_file, game_dir, output_dir, game_name):
         # Fallback if structure is different
         annotations = data if isinstance(data, list) else []
 
-    # Sort all events by position to get chronological order
-    sorted_events = sorted(annotations, key=lambda x: int(x.get('position', 0)))
-    
-    # Extract goal events to avoid them
-    goal_events = []
-    for event in sorted_events:
+    # Sort all events by position to get chronological order might be useful, but not strictly necessary for this logic
+    # sorted_events = sorted(annotations, key=lambda x: int(x.get('position', 0)))
+    # Using original annotations list is fine here
+
+    # Extract goal event times for checking proximity
+    goal_event_times = []
+    for event in annotations: # Iterate through original annotations
         if event.get('label') == 'Goal':
             try:
                 period = int(event['gameTime'].split(' - ')[0])
@@ -47,188 +51,174 @@ def extract_shot_clips(json_file, game_dir, output_dir, game_name):
                 minutes, seconds = map(int, time_str.split(':'))
                 # Convert to total seconds from start of period
                 total_seconds = minutes * 60 + seconds
-                goal_events.append((period, total_seconds))
+                goal_event_times.append((period, total_seconds))
             except (KeyError, ValueError, IndexError):
                 continue
-    
-    # Find shots on target that didn't result in goals
+
+    # Find shots on target that weren't immediately followed by a goal
     shot_events = []
-    for event in sorted_events:
+    for event in annotations: # Iterate through original annotations again
         if event.get('label') == 'Shots on target':
             try:
                 period = int(event['gameTime'].split(' - ')[0])
                 time_str = event['gameTime'].split(' - ')[1]
                 minutes, seconds = map(int, time_str.split(':'))
                 team = event.get('team', 'unknown')
-                position = int(event.get('position', 0))
-                
-                # Check if this shot is close to a goal (within 10 seconds)
+                position = int(event.get('position', 0)) # Keep position if needed for sorting later, maybe?
+
+                # Check if this shot is close to a goal (e.g., within 2 seconds AFTER)
+                # This filter ensures we don't pick shots that *immediately* result in a goal annotation.
                 is_near_goal = False
                 shot_time = minutes * 60 + seconds
-                
-                for goal_period, goal_time in goal_events:
+
+                for goal_period, goal_time in goal_event_times:
                     if period == goal_period:
-                        time_diff = abs(goal_time - shot_time)
-                        if time_diff < 10:  # Within 10 seconds of a goal
+                        # Check if goal happens shortly AFTER the shot
+                        time_diff = goal_time - shot_time
+                        if 0 <= time_diff < 2:  # Goal within 2 seconds AFTER shot
                             is_near_goal = True
                             break
-                
-                # Only include shots that aren't near goals
+
+                # Only include shots that aren't immediately followed by goals
                 if not is_near_goal:
                     shot_events.append({
                         'period': period,
                         'minutes': minutes,
                         'seconds': seconds,
                         'team': team,
-                        'position': position,
+                        'position': position, # Store position if needed
                         'gameTime': event['gameTime']
                     })
             except (KeyError, ValueError, IndexError) as e:
-                print(f"Error processing shot event: {e}")
+                print(f"Error processing shot event: {event}. Error: {e}")
                 continue
-    
-    print(f"Game: {game_name} - Found {len(shot_events)} shots on target (excluding those near goals)")
+
+    print(f"Game: {game_name} - Found {len(shot_events)} shots on target (excluding those immediately followed by goals)")
     if len(shot_events) == 0:
         return
-    
-    # Get video files from game directory
-    # Look specifically for the 1_224p.mkv and 2_224p.mkv naming pattern
+
+    # Get video files (same as before)
     first_half = os.path.join(game_dir, "1_224p.mkv")
     second_half = os.path.join(game_dir, "2_224p.mkv")
-    
     video_files = [first_half, second_half]
-    
-    # Check if the files exist
     for i, file in enumerate(video_files):
         if not os.path.exists(file):
             print(f"Warning: Video file for half {i+1} not found: {file}")
-            video_files[i] = None  # Mark as not available
-    
-    # Process each shot event
+            video_files[i] = None
+
+    # Process each valid shot event
+    clips_extracted_count = 0 # clip_limit = 10 Example limit
+
     for i, shot in enumerate(shot_events):
+        # Optional: Check clip limit
+        # if clip_limit is not None and clips_extracted_count >= clip_limit:
+        #    print(f"Reached clip limit of {clip_limit}. Stopping extraction for this game.")
+        #    break
+
         try:
             period = shot['period']
             minutes = shot['minutes']
             seconds = shot['seconds']
             team = shot['team']
-            
-            # Select correct video file based on period
+
+            # Select correct video file
             if period <= 0 or period > 2:
                 print(f"Error: Invalid period {period} for shot at {shot['gameTime']}")
                 continue
-                
             video_path = video_files[period - 1]
             if video_path is None:
                 print(f"Error: Video file for period {period} not available. Skipping shot at {shot['gameTime']}")
                 continue
-            
-            # Extract the clip
+
+            # Format clip name
             time_str = f"{minutes:02d}:{seconds:02d}"
             clip_name = f"{game_name}_shot_{i+1}_period{period}_{time_str.replace(':', 'm')}s_{team}.mkv"
             output_path = os.path.join(output_dir, clip_name)
-            
-            # Check if output file already exists - skip if it does
+
             if os.path.exists(output_path):
                 print(f"Clip already exists: {output_path}. Skipping.")
+                # clips_extracted_count += 1 # Increment if counting existing for limit
                 continue
-            
-            # Calculate the frames in the video
+
+            # Get video FPS
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 print(f"Error: Could not open video file {video_path}")
                 continue
-                
             fps = cap.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                 print(f"Warning: Could not determine FPS for {video_path}. Skipping shot.")
+                 cap.release()
+                 continue
             cap.release()
-            
+
             # Convert shot time to seconds from the beginning of the half
-            minutes_in_seconds = minutes * 60
-            total_seconds = minutes_in_seconds + seconds
+            total_seconds = (minutes * 60) + seconds
             shot_frame = int(total_seconds * fps)
-            
-            # Calculate start frame (15 seconds that include the shot)
-            # Start 10 seconds before the shot and continue 5 seconds after
-            seconds_before = 10
-            seconds_after = 5
-            start_frame = max(0, shot_frame - (seconds_before * int(fps)))
-            duration = seconds_before + seconds_after  # 15 seconds total
-            
-            # Calculate time values for ffmpeg
+
+            # --- MODIFICATION START: Calculate 15 seconds BEFORE the shot ---
+            seconds_to_extract = 15
+            start_frame = max(0, shot_frame - (seconds_to_extract * int(fps)))
+            duration = seconds_to_extract  # Duration is now just the seconds before
             start_time = start_frame / fps
-            
-            # Use ffmpeg to extract the clip
+            # --- MODIFICATION END ---
+
+            # Use ffmpeg (consider putting -ss before -i for accuracy)
             ffmpeg_cmd = "ffmpeg"
-            
-            # Try copy mode first (faster, no re-encoding)
             cmd = [
                 ffmpeg_cmd,
+                "-ss", f"{start_time:.3f}", # Seek before input
                 "-i", video_path,
-                "-ss", f"{start_time:.3f}",
                 "-t", f"{duration:.3f}",
-                "-c", "copy",       # Copy the codec (no re-encoding)
-                "-y",               # Overwrite output files without asking
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero", # Helps with copy mode
+                "-y",
                 output_path
             ]
-            
-            print(f"Extracting shot {i+1}: {shot['gameTime']} - {team} team")
-            
+            print(f"Extracting shot {i+1}: {shot['gameTime']} - {team} team (extracting {duration}s before)")
+
             try:
-                # On Linux (cluster), we don't need shell=True
-                # Capture stderr for debugging
-                result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE)
-                
-                # Check if the command succeeded
+                result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
                 if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
                     print(f"Successfully saved clip to {output_path}")
+                    # clips_extracted_count += 1 # Increment if counting for limit
                 else:
-                    # If the copy method fails, try re-encoding method for more accuracy
-                    print(f"Copy method failed. Trying with re-encoding...")
-                    # For better accuracy with re-encoding, put -ss after input
+                    # Fallback with re-encoding (also use -ss before -i)
+                    print(f"Copy method failed (Code: {result.returncode}). Error: {result.stderr}. Trying re-encoding...")
                     fallback_cmd = [
                         ffmpeg_cmd,
+                        "-ss", f"{start_time:.3f}", # Seek before input
                         "-i", video_path,
-                        "-ss", f"{start_time:.3f}",
                         "-t", f"{duration:.3f}",
-                        "-c:v", "libx264",  # Use x264 codec
-                        "-c:a", "aac",      # Use AAC for audio
-                        "-strict", "experimental",
-                        "-b:v", "2500k",    # Reasonable bitrate
-                        "-preset", "fast",  # Faster encoding with good quality
-                        "-y",               # Overwrite output files
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-c:a", "aac",
+                        "-b:a", "128k",
+                        "-y",
                         output_path
                     ]
-                    
-                    fallback_result = subprocess.run(fallback_cmd, check=False, stderr=subprocess.PIPE)
-                    
+                    fallback_result = subprocess.run(fallback_cmd, check=False, stderr=subprocess.PIPE, text=True)
                     if fallback_result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
                         print(f"Successfully saved clip using re-encoding to {output_path}")
+                        # clips_extracted_count += 1 # Increment if counting for limit
                     else:
-                        print(f"Error extracting clip: {fallback_result.stderr.decode()}")
-                        # Try one last method with different codec options
-                        last_cmd = [
-                            ffmpeg_cmd,
-                            "-i", video_path,
-                            "-ss", f"{start_time:.3f}",
-                            "-t", f"{duration:.3f}",
-                            "-vcodec", "mpeg4",
-                            "-q:v", "5",
-                            "-acodec", "aac",
-                            "-y",
-                            output_path
-                        ]
-                        try:
-                            last_result = subprocess.run(last_cmd, check=False)
-                            if last_result.returncode == 0:
-                                print(f"Final method succeeded: {output_path}")
-                            else:
-                                print(f"All extraction methods failed for this clip")
-                        except Exception as e:
-                            print(f"Exception in final attempt: {e}")
+                        print(f"Fallback extraction failed (Code: {fallback_result.returncode}). Error: {fallback_result.stderr}")
+                        if os.path.exists(output_path):
+                            try: os.remove(output_path)
+                            except OSError as e: print(f"Error removing failed file: {e}")
+
             except Exception as e:
-                print(f"Unexpected error: {e}")
-                
+                print(f"Unexpected error during ffmpeg execution: {e}")
+                if os.path.exists(output_path):
+                     try: os.remove(output_path)
+                     except OSError as oe: print(f"Error removing file after exception: {oe}")
+
         except (KeyError, ValueError, IndexError) as e:
-            print(f"Error processing shot event: {e}")
+            print(f"Error processing shot event {i+1}: {shot}. Error: {e}")
+            continue
+        except Exception as e:
+            print(f"Unexpected error processing shot event {i+1}: {shot}. Error: {e}")
             continue
 
 def process_all_games(data_dir, output_dir):
