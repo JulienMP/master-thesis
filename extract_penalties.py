@@ -46,7 +46,10 @@ def extract_penalty_clips(json_file, game_dir, output_dir, game_name, trigger_wi
 
     # Store events with their times for easier lookup
     events_with_time = []
-    trigger_labels = {"Foul", "Yellow card", "Red card"}
+    # Add "Yellow->red card" to the trigger labels
+    trigger_labels = {"Foul", "Yellow card", "Red card", "Yellow->red card"}
+    
+    print(f"Scanning annotations in {json_file}")
     for event in annotations:
         period, total_seconds = get_event_time_seconds(event)
         label = event.get('label')
@@ -58,9 +61,22 @@ def extract_penalty_clips(json_file, game_dir, output_dir, game_name, trigger_wi
                 'team': event.get('team', 'unknown'),
                 'gameTime': event.get('gameTime') # Keep original time string
             })
+            # Debug print to check if we're capturing all events
+            print(f"Found event: {label} at {event.get('gameTime')}")
 
     # Sort events chronologically within each period
     events_with_time.sort(key=lambda x: (x['period'], x['time_seconds']))
+
+    # Find all labels
+    unique_labels = set(event['label'] for event in events_with_time)
+    print(f"Unique labels found in annotations: {unique_labels}")
+    
+    # Check specifically for Penalty events
+    penalty_events = [event for event in events_with_time if event['label'] == 'Penalty']
+    print(f"Number of Penalty events found: {len(penalty_events)}")
+    if penalty_events:
+        for pe in penalty_events:
+            print(f"  Penalty at {pe['gameTime']}")
 
     # Find Penalty events and look back for recent trigger events (Foul/Card)
     penalty_trigger_pairs = []
@@ -87,6 +103,14 @@ def extract_penalty_clips(json_file, game_dir, output_dir, game_name, trigger_wi
                     'trigger_event': found_trigger
                 })
                 print(f"Found pair: Trigger '{found_trigger['label']}' at {found_trigger['gameTime']} -> Penalty at {current_event['gameTime']}")
+            else:
+                print(f"Warning: No trigger event found for Penalty at {current_event['gameTime']}. "
+                      f"Using the Penalty event itself as the trigger.")
+                # If no trigger found, use the Penalty event itself as the trigger
+                penalty_trigger_pairs.append({
+                    'penalty_event': current_event,
+                    'trigger_event': current_event
+                })
 
     print(f"Game: {game_name} - Found {len(penalty_trigger_pairs)} potential Penalty sequences.")
     if len(penalty_trigger_pairs) == 0:
@@ -272,8 +296,8 @@ if __name__ == "__main__":
                         help='Directory containing the game data')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory to save the extracted clips')
-    parser.add_argument('--window', type=int, default=5,
-                        help='Max seconds before a Penalty to look back for a trigger Foul/Card (default: 5)')
+    parser.add_argument('--window', type=int, default=120,
+                        help='Max seconds before a Penalty to look back for a trigger Foul/Card (default: 120)')
 
     args = parser.parse_args()
 
