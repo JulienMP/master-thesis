@@ -18,7 +18,7 @@ def get_event_time_seconds(event):
     except (KeyError, ValueError, IndexError, AttributeError):
         return None, None
 
-def extract_penalty_clips(json_file, game_dir, output_dir, game_name, trigger_window=5):
+def extract_penalty_clips(json_file, game_dir, output_dir, game_name, trigger_window=120):
     """
     Extracts 15-second clips starting 15s before the Foul/Card
     that immediately precedes a Penalty label.
