@@ -15,6 +15,9 @@ OUTPUT_DIR="${SCRATCH_DIR}/penalties"
 VENV_DIR="${HOME_DIR}/myenv"  # Path to your virtual environment
 SCRIPT_PATH="${HOME_DIR}/extract_penalties.py"
 
+# Set trigger window (max seconds before a Penalty to look for a trigger event)
+TRIGGER_WINDOW=5
+
 # Print job information
 echo "Starting penalty clip extraction job"
 echo "Job started at: $(date)"
@@ -22,6 +25,7 @@ echo "Running on node: $(hostname)"
 echo "Data directory: $DATA_DIR"
 echo "Output directory: $OUTPUT_DIR"
 echo "Script path: $SCRIPT_PATH"
+echo "Penalty trigger lookback window: $TRIGGER_WINDOW seconds"
 echo "Processing ALL games (no limit)"
 
 # Create output directory if it doesn't exist
@@ -36,7 +40,8 @@ fi
 # Run the Python script to extract penalty clips
 python "$SCRIPT_PATH" \
   --data_dir "$DATA_DIR" \
-  --output_dir "$OUTPUT_DIR"
+  --output_dir "$OUTPUT_DIR" \
+  --window "$TRIGGER_WINDOW"
 
 # Deactivate virtual environment if activated
 if [ -d "$VENV_DIR" ]; then
