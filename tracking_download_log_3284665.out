@@ -1,0 +1,12 @@
+Activating virtual environment at /home/jmparirwa/master-thesis/myenv
+/home/jmparirwa/master-thesis/myenv/bin/python
+Python 3.11.3
+Starting tracking data download at Thu Apr 17 16:12:00 CEST 2025
+Data will be downloaded to: /scratch/users/jmparirwa/data_tracking
+Downloading tracking data to: /scratch/users/jmparirwa/data_tracking
+Python version: 3.11.3 (main, Apr 19 2023, 23:54:32) [GCC 11.2.0]
+Downloading tracking task data...
+Downloading tracking-2023 task data...
+Download completed successfully!
+Tracking data download completed successfully at Thu Apr 17 17:38:09 CEST 2025
+Job completed at Thu Apr 17 17:38:09 CEST 2025
